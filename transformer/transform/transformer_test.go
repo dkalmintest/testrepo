@@ -6,9 +6,9 @@ import (
 )
 
 func transformerTest_IsTrue(t *testing.T) {
-	transformResult := transformer.Transform()
+	var transformResult := transformer.Transform()
 	if transformResult != true {
-		t.Errorf("Expected true, got '%v'", daGoResult)
+		t.Errorf("Expected true, got '%v'", transformResult)
 	} else {
 		t.Log("we passed!")
 	}
