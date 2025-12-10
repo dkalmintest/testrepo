@@ -1,7 +1,7 @@
 package transformer_test
 
 import (
-	transformer "gh/transform/transformer"
+	transformer "gh/transform/transform"
 	"testing"
 )
 
