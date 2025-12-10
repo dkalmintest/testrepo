@@ -27,8 +27,10 @@ jobs:
     - name: Build
       run: go build -v -o transformer main.go
 
+    - name: Test
+      run: go test
+      
     - name: darun
       run: ./transformer
       
-    - name: Test
-      run: go test -v ./transformer
+
