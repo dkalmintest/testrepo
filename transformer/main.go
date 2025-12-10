@@ -1,7 +1,7 @@
 package main
 
 import (
-	transformer "gh/transform/transformer"
+	transformer "gh/transform/transform"
 	"fmt"
 )
 
