@@ -34,7 +34,7 @@ jobs:
       uses: actions/upload-artifact@v5
       with:
         name: transformer
-        path: /home/runner/work/transformer/transformer
+        path: /home/runner/work/testrepo/transformer/transformer
         
   Transform-Content:
     needs: [Build-and-Test]
