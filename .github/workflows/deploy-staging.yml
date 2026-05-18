@@ -1,0 +1,143 @@
+name: Deploy Staging
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve source SHA from PR labels
+        id: source_sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          SOURCE_SHA=""
+          if [[ -n "$GH_TOKEN" ]]; then
+            SOURCE_SHA="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name | sub("^sha-"; "")' | head -n 1)"
+          fi
+
+          if [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+            echo "Resolved source SHA from PR label: $SOURCE_SHA"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            echo "No valid sha-* label found on PR #$PR_NUMBER."
+          fi
+
+      - name: Comment on PR when source SHA label is missing
+        if: ${{ steps.source_sha.outputs.sha == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Staging deploy was not started because this PR is missing a valid source SHA label (expected: sha-<40 character commit SHA>)."
+            echo "Added missing source SHA label comment to PR #$PR_NUMBER."
+          else
+            echo "GITHUB_TOKEN is not available; missing source SHA label comment was not added to PR #$PR_NUMBER."
+          fi
+          exit 1
+
+      - name: Check if staging is already locked
+        id: check_lock
+        if: ${{ steps.source_sha.outputs.sha != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          CURRENT_LOCKED=""
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "PAT_TOKEN is not available; cannot read repository variable CONTENT_ENV_LOCKED."
+            exit 1
+          fi
+
+          if ! CURRENT_LOCKED=$(gh variable get CONTENT_ENV_LOCKED --repo "$GITHUB_REPOSITORY" --jq '.value' 2>/dev/null); then
+            echo "Failed to read repository variable CONTENT_ENV_LOCKED."
+            exit 1
+          fi
+
+          echo "current_locked=$CURRENT_LOCKED" >> "$GITHUB_OUTPUT"
+
+      - name: Lock staging for this deploy
+        id: lock_staging
+        if: ${{ steps.source_sha.outputs.sha != '' && (steps.check_lock.outputs.current_locked == 'notlocked' || steps.check_lock.outputs.current_locked == steps.source_sha.outputs.sha) }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          SOURCE_SHA: ${{ steps.source_sha.outputs.sha }}
+        run: |
+          LOCKED="false"
+          if [[ -n "$GH_TOKEN" ]]; then
+            if [[ -n "$SOURCE_SHA" ]]; then
+              if gh variable set CONTENT_ENV_LOCKED --body "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"; then
+                echo "CONTENT_ENV_LOCKED=$SOURCE_SHA" >> "$GITHUB_ENV"
+                LOCKED="true"
+                echo "Repository variable CONTENT_ENV_LOCKED set to $SOURCE_SHA for staging deploy lock."
+              else
+                echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging deploy lock."
+              fi
+            else
+              echo "Could not resolve SOURCE_SHA from PR labels."
+            fi
+          else
+            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging deploy lock."
+          fi
+          echo "locked=$LOCKED" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR if staging is already locked
+        if: ${{ steps.source_sha.outputs.sha != '' && steps.check_lock.outputs.current_locked != 'notlocked' && steps.check_lock.outputs.current_locked != steps.source_sha.outputs.sha }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CURRENT_LOCKED: ${{ steps.check_lock.outputs.current_locked }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Staging deploy was not started because the environment is already locked with another deployment (SHA: $CURRENT_LOCKED). Please unlock or wait for the current deploy to finish."
+            echo "Commented on PR #$PR_NUMBER: Staging is already locked."
+          else
+            echo "GITHUB_TOKEN is not available; could not comment about staging lock."
+          fi
+
+      - name: Trigger PR checks after staging lock
+        if: ${{ success() && steps.lock_staging.outputs.locked == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ steps.source_sha.outputs.sha }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            PR_HEAD_REF="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefName --jq '.headRefName')"
+            if [[ -n "$PR_HEAD_REF" ]]; then
+              gh workflow run transform.yml --repo "$GITHUB_REPOSITORY" --ref "$PR_HEAD_REF"
+              echo "Triggered Transform Content workflow for PR #$PR_NUMBER on branch $PR_HEAD_REF."
+            else
+              echo "Could not resolve PR head branch for PR #$PR_NUMBER; Transform Content workflow was not triggered."
+            fi
+          else
+            echo "GITHUB_TOKEN is not available; Transform Content workflow was not triggered for PR #$PR_NUMBER."
+          fi
+
+      - name: Comment on PR that staging deploy started
+        if: ${{ success() && steps.lock_staging.outputs.locked == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Staging deploy started and environment is locked to the PR source SHA label."
+            echo "Added staging deploy confirmation comment to PR #$PR_NUMBER."
+          else
+            echo "GITHUB_TOKEN is not available; staging deploy confirmation comment was not added to PR #$PR_NUMBER."
+          fi
