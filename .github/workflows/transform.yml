@@ -1,0 +1,11 @@
+name: Transform PR Content
+
+on:
+  workflow_dispatch:
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Output run marker
+        run: echo "I ran"
