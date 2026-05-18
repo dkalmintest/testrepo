@@ -21,12 +21,24 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           TRIMMED_COMMENT="$(echo "$COMMENT_BODY" | xargs)"
+          SHOULD_DEPLOY="false"
+          SHOULD_UNLOCK="false"
+
           if [[ "$TRIMMED_COMMENT" == "deploy staging" ]]; then
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            SHOULD_DEPLOY="true"
             echo "Detected deploy command: $TRIMMED_COMMENT"
-          else
-            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping staging deploy because comment did not match 'deploy staging': $COMMENT_BODY"
+          fi
+
+          if [[ "$TRIMMED_COMMENT" == "unlock staging" ]]; then
+            SHOULD_UNLOCK="true"
+            echo "Detected unlock command: $TRIMMED_COMMENT"
+          fi
+
+          echo "should_deploy=$SHOULD_DEPLOY" >> "$GITHUB_OUTPUT"
+          echo "should_unlock=$SHOULD_UNLOCK" >> "$GITHUB_OUTPUT"
+
+          if [[ "$SHOULD_DEPLOY" == "false" && "$SHOULD_UNLOCK" == "false" ]]; then
+            echo "Skipping staging action because comment did not match 'deploy staging' or 'unlock staging': $COMMENT_BODY"
           fi
 
       - name: Details
@@ -37,6 +49,8 @@ jobs:
           PR_API_URL: ${{ github.event.issue.pull_request.url }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          SHOULD_DEPLOY: ${{ steps.deploy_command.outputs.should_deploy }}
+          SHOULD_UNLOCK: ${{ steps.deploy_command.outputs.should_unlock }}
         run: |
           printf 'PR number: %s\n' "$PR_NUMBER"
           printf 'PR title: %s\n' "$PR_TITLE"
@@ -44,6 +58,8 @@ jobs:
           printf 'PR API URL: %s\n' "$PR_API_URL"
           printf 'Comment author: %s\n' "$COMMENT_AUTHOR"
           printf 'Comment body: %s\n' "$COMMENT_BODY"
+          printf 'Should deploy: %s\n' "$SHOULD_DEPLOY"
+          printf 'Should unlock: %s\n' "$SHOULD_UNLOCK"
 
       - name: Resolve source SHA from PR labels
         id: source_sha
