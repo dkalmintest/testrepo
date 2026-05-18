@@ -56,19 +56,8 @@ jobs:
         id: check_lock
         if: ${{ steps.source_sha.outputs.sha != '' }}
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          CURRENT_LOCKED: ${{ vars.CONTENT_ENV_LOCKED }}
         run: |
-          CURRENT_LOCKED=""
-          if [[ -z "$GH_TOKEN" ]]; then
-            echo "PAT_TOKEN is not available; cannot read repository variable CONTENT_ENV_LOCKED."
-            exit 1
-          fi
-
-          if ! CURRENT_LOCKED=$(gh variable get CONTENT_ENV_LOCKED --repo "$GITHUB_REPOSITORY" --jq '.value' 2>/dev/null); then
-            echo "Failed to read repository variable CONTENT_ENV_LOCKED."
-            exit 1
-          fi
-
           echo "current_locked=$CURRENT_LOCKED" >> "$GITHUB_OUTPUT"
 
       - name: Lock staging for this deploy
