@@ -115,6 +115,26 @@ jobs:
 
           echo "current_locked=$CURRENT_LOCKED" >> "$GITHUB_OUTPUT"
 
+      - name: Unlock staging
+        id: unlock_staging
+        if: ${{ steps.deploy_command.outputs.should_unlock == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          UNLOCKED="false"
+          if [[ -n "$GH_TOKEN" ]]; then
+            if gh variable set CONTENT_ENV_LOCKED --body "unlocked" --repo "$GITHUB_REPOSITORY"; then
+              echo "CONTENT_ENV_LOCKED=unlocked" >> "$GITHUB_ENV"
+              UNLOCKED="true"
+              echo "Repository variable CONTENT_ENV_LOCKED set to unlocked."
+            else
+              echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging unlock."
+            fi
+          else
+            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging unlock."
+          fi
+          echo "unlocked=$UNLOCKED" >> "$GITHUB_OUTPUT"
+
       - name: Lock staging for this deploy
         id: lock_staging
         if: ${{ steps.deploy_command.outputs.should_deploy == 'true' && steps.source_sha.outputs.sha != '' && (steps.check_lock.outputs.current_locked == 'notlocked' || steps.check_lock.outputs.current_locked == steps.source_sha.outputs.sha) }}
