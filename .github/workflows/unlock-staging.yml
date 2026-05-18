@@ -1,0 +1,28 @@
+name: Unlock Staging
+
+on:
+  workflow_call:
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  unlock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unlock staging
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            if gh variable set CONTENT_ENV_LOCKED --body "notlocked" --repo "$GITHUB_REPOSITORY"; then
+              echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
+              echo "Repository variable CONTENT_ENV_LOCKED set to notlocked."
+            else
+              echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging unlock."
+              exit 1
+            fi
+          else
+            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging unlock."
+            exit 1
+          fi

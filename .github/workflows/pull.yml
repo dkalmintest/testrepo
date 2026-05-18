@@ -12,6 +12,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.event.issue.pull_request != null
+    outputs:
+      should_unlock: ${{ steps.deploy_command.outputs.should_unlock }}
     steps:
       - uses: actions/checkout@v6
 
@@ -62,26 +64,6 @@ jobs:
           printf 'Comment body: %s\n' "$COMMENT_BODY"
           printf 'Should deploy: %s\n' "$SHOULD_DEPLOY"
           printf 'Should unlock: %s\n' "$SHOULD_UNLOCK"
-
-      - name: Unlock staging
-        id: unlock_staging
-        if: ${{ steps.deploy_command.outputs.should_unlock == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          UNLOCKED="false"
-          if [[ -n "$GH_TOKEN" ]]; then
-            if gh variable set CONTENT_ENV_LOCKED --body "notlocked" --repo "$GITHUB_REPOSITORY"; then
-              echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
-              UNLOCKED="true"
-              echo "Repository variable CONTENT_ENV_LOCKED set to notlocked."
-            else
-              echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging unlock."
-            fi
-          else
-            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging unlock."
-          fi
-          echo "unlocked=$UNLOCKED" >> "$GITHUB_OUTPUT"
 
       - name: Resolve source SHA from PR labels
         id: source_sha
@@ -208,3 +190,10 @@ jobs:
           else
             echo "GITHUB_TOKEN is not available; staging deploy confirmation comment was not added to PR #$PR_NUMBER."
           fi
+
+  unlock_staging:
+    if: ${{ github.event.issue.pull_request != null && needs.deploy.outputs.should_unlock == 'true' }}
+    needs: deploy
+    uses: ./.github/workflows/unlock-staging.yml
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
