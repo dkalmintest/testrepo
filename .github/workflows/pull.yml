@@ -20,7 +20,9 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          TRIMMED_COMMENT="$(printf '%s' "$COMMENT_BODY" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          TRIMMED_COMMENT="$COMMENT_BODY"
+          TRIMMED_COMMENT="${TRIMMED_COMMENT#"${TRIMMED_COMMENT%%[![:space:]]*}"}"
+          TRIMMED_COMMENT="${TRIMMED_COMMENT%"${TRIMMED_COMMENT##*[![:space:]]}"}"
           SHOULD_DEPLOY="false"
           SHOULD_UNLOCK="false"
 
@@ -60,6 +62,26 @@ jobs:
           printf 'Comment body: %s\n' "$COMMENT_BODY"
           printf 'Should deploy: %s\n' "$SHOULD_DEPLOY"
           printf 'Should unlock: %s\n' "$SHOULD_UNLOCK"
+
+      - name: Unlock staging
+        id: unlock_staging
+        if: ${{ steps.deploy_command.outputs.should_unlock == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          UNLOCKED="false"
+          if [[ -n "$GH_TOKEN" ]]; then
+            if gh variable set CONTENT_ENV_LOCKED --body "notlocked" --repo "$GITHUB_REPOSITORY"; then
+              echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
+              UNLOCKED="true"
+              echo "Repository variable CONTENT_ENV_LOCKED set to notlocked."
+            else
+              echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging unlock."
+            fi
+          else
+            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging unlock."
+          fi
+          echo "unlocked=$UNLOCKED" >> "$GITHUB_OUTPUT"
 
       - name: Resolve source SHA from PR labels
         id: source_sha
@@ -114,26 +136,6 @@ jobs:
           fi
 
           echo "current_locked=$CURRENT_LOCKED" >> "$GITHUB_OUTPUT"
-
-      - name: Unlock staging
-        id: unlock_staging
-        if: ${{ steps.deploy_command.outputs.should_unlock == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          UNLOCKED="false"
-          if [[ -n "$GH_TOKEN" ]]; then
-            if gh variable set CONTENT_ENV_LOCKED --body "unlocked" --repo "$GITHUB_REPOSITORY"; then
-              echo "CONTENT_ENV_LOCKED=unlocked" >> "$GITHUB_ENV"
-              UNLOCKED="true"
-              echo "Repository variable CONTENT_ENV_LOCKED set to unlocked."
-            else
-              echo "Failed to update repository variable CONTENT_ENV_LOCKED for staging unlock."
-            fi
-          else
-            echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for staging unlock."
-          fi
-          echo "unlocked=$UNLOCKED" >> "$GITHUB_OUTPUT"
 
       - name: Lock staging for this deploy
         id: lock_staging
