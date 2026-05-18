@@ -20,7 +20,7 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          TRIMMED_COMMENT="$(echo "$COMMENT_BODY" | xargs)"
+          TRIMMED_COMMENT="$(printf '%s' "$COMMENT_BODY" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
           SHOULD_DEPLOY="false"
           SHOULD_UNLOCK="false"
 
