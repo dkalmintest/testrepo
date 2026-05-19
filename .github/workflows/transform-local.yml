@@ -1,7 +1,7 @@
 # Transform Content runs a go module that handles transforming content
 # and uploads to AFD unless CONTENT_ENV_LOCKED is set to locked.
 
-name: Transform Content
+name: Transform Content Local
 permissions:
   contents: write
   id-token: write
@@ -9,13 +9,13 @@ permissions:
 
 on:
   workflow_dispatch:
- # push:
- #   branches: [ "main" ]
- #   paths:
- #     - "content/**"
- # pull_request:
- #   paths:
- #     - "content/**"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "content/**"
+  pull_request:
+    paths:
+      - "content/**"
 
 jobs:
   Build-Test-Transform:
@@ -37,18 +37,13 @@ jobs:
         go-version-file: transformer/go.mod
 
     - name: Include Markdown
-      working-directory: ./transformer/markdown-includer
-      run: node includeMarkdown.js ../../content
+      run: echo "Skipping markdown inclusion in local workflow."
 
     - name: Transform
-      working-directory: ./transformer
-      run: go run main.go --input ../content --output ../output
+      run: echo "Skipping transform in local workflow."
 
     - name: Upload HTML Artifacts
-      uses: actions/upload-artifact@v7
-      with:
-        name: transformer
-        path: ./output
+      run: echo "Skipping HTML artifact upload in local workflow."
 
     - name: Resolve source SHA
       shell: bash
@@ -93,11 +88,7 @@ jobs:
 
     - name: Azure login
       if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
-      uses: azure/login@v3
-      with:
-        client-id: ${{vars.AZURE_AD_CLIENT_ID}}
-        tenant-id: ${{vars.AZURE_AD_TENANT_ID}}
-        subscription-id: ${{vars.AZURE_SUBSCRIPTION_ID}}
+      run: echo "Skipping Azure login in local workflow."
 
     - name: Lock content environment for this publish
       if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
@@ -114,12 +105,7 @@ jobs:
           
     - name: Copy Content to Azure Storage
       if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
-      run: |
-        azcopy sync ./output \
-                     "https://$STORAGE_ACCOUNT_NAME_ENV.blob.core.windows.net/$STORAGE_ACCOUNT_BLOB_CONTAINER_NAME_ENV/" \
-                     --recursive \
-                     --delete-destination=true \
-                     --compare-hash=md5
+      run: echo "Skipping Azure Storage sync in local workflow."
 
     - name: Unlock content environment after successful main publish
       if: ${{ github.event_name == 'push' && github.ref_name == 'main' && success() }}
