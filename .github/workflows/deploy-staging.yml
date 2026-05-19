@@ -109,7 +109,7 @@ jobs:
           if [[ -n "$GH_TOKEN" ]]; then
             PR_HEAD_REF="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefName --jq '.headRefName')"
             if [[ -n "$PR_HEAD_REF" ]]; then
-              gh workflow run transform.yml --repo "$GITHUB_REPOSITORY" --ref "$PR_HEAD_REF"
+              gh workflow run transform-local.yml --repo "$GITHUB_REPOSITORY" --ref "$PR_HEAD_REF"
               echo "Triggered Transform Content workflow for PR #$PR_NUMBER on branch $PR_HEAD_REF."
             else
               echo "Could not resolve PR head branch for PR #$PR_NUMBER; Transform Content workflow was not triggered."
