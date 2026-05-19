@@ -5,7 +5,8 @@ name: Transform Content Local
 permissions:
   contents: write
   id-token: write
-  pull-requests: read
+  issues: write
+  pull-requests: write
 
 on:
   workflow_dispatch:
@@ -67,6 +68,16 @@ jobs:
             SOURCE_SHA="$SOURCE_SHA_FROM_LABEL"
           fi
         fi
+
+        if [[ -n "$PR_NUMBER" && -n "$GH_TOKEN" && "$SOURCE_SHA" == "$GITHUB_SHA" ]]; then
+          SOURCE_SHA_LABEL="sha-$SOURCE_SHA"
+          if gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=$SOURCE_SHA_LABEL" >/dev/null; then
+            echo "Added missing source SHA label to PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
+          else
+            echo "Failed to add missing source SHA label to PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
+          fi
+        fi
+
         echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
         echo "Resolved source SHA: $SOURCE_SHA"
 
