@@ -1,0 +1,67 @@
+name: Detect Initial Lock State
+
+on:
+  workflow_call:
+    inputs:
+      initial_content_env_locked:
+        description: Initial environment lock value to evaluate
+        required: true
+        type: string
+      source_sha:
+        description: Resolved source SHA for this run
+        required: true
+        type: string
+      previous_source_sha:
+        description: Previous PR source SHA label before refresh, when available
+        required: false
+        type: string
+    outputs:
+      initial_content_env_lock_state:
+        description: Derived initial lock state
+        value: ${{ jobs.detect-initial-lock-state.outputs.initial_content_env_lock_state }}
+      initial_content_env_lock_matches_run:
+        description: Whether the initial lock matches this run source SHA
+        value: ${{ jobs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_run }}
+      initial_content_env_lock_matches_previous_sha:
+        description: Whether the initial lock matches the previous PR source SHA
+        value: ${{ jobs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_previous_sha }}
+
+jobs:
+  detect-initial-lock-state:
+    runs-on: ubuntu-latest
+    outputs:
+      initial_content_env_lock_state: ${{ steps.detect.outputs.initial_content_env_lock_state }}
+      initial_content_env_lock_matches_run: ${{ steps.detect.outputs.initial_content_env_lock_matches_run }}
+      initial_content_env_lock_matches_previous_sha: ${{ steps.detect.outputs.initial_content_env_lock_matches_previous_sha }}
+    steps:
+      - name: Detect initial lock state
+        id: detect
+        shell: bash
+        env:
+          INITIAL_CONTENT_ENV_LOCKED_INPUT: ${{ inputs.initial_content_env_locked }}
+          SOURCE_SHA_INPUT: ${{ inputs.source_sha }}
+          PREVIOUS_SOURCE_SHA_INPUT: ${{ inputs.previous_source_sha }}
+        run: |
+          INITIAL_CONTENT_ENV_LOCK_STATE="notlocked"
+          INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN="false"
+          INITIAL_CONTENT_ENV_LOCK_MATCHES_PREVIOUS_SHA="false"
+
+          if [[ "$INITIAL_CONTENT_ENV_LOCKED_INPUT" == "notlocked" ]]; then
+            echo "Initial CONTENT_ENV_LOCKED is explicitly notlocked and is allowed to deploy."
+          elif [[ "$INITIAL_CONTENT_ENV_LOCKED_INPUT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            INITIAL_CONTENT_ENV_LOCK_STATE="sha-locked"
+            echo "Initial CONTENT_ENV_LOCKED contains lock SHA: $INITIAL_CONTENT_ENV_LOCKED_INPUT"
+            if [[ "$INITIAL_CONTENT_ENV_LOCKED_INPUT" == "$SOURCE_SHA_INPUT" ]]; then
+              INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN="true"
+              echo "Initial lock SHA matches this run source SHA and is allowed to deploy."
+            elif [[ -n "$PREVIOUS_SOURCE_SHA_INPUT" && "$INITIAL_CONTENT_ENV_LOCKED_INPUT" == "$PREVIOUS_SOURCE_SHA_INPUT" ]]; then
+              INITIAL_CONTENT_ENV_LOCK_MATCHES_PREVIOUS_SHA="true"
+              echo "Initial lock SHA matches the previous PR source SHA label and is allowed to deploy."
+            fi
+          else
+            echo "Initial CONTENT_ENV_LOCKED is not a recognized lock value and is treated as unlocked: $INITIAL_CONTENT_ENV_LOCKED_INPUT"
+          fi
+
+          echo "initial_content_env_lock_state=$INITIAL_CONTENT_ENV_LOCK_STATE" >> "$GITHUB_OUTPUT"
+          echo "initial_content_env_lock_matches_run=$INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN" >> "$GITHUB_OUTPUT"
+          echo "initial_content_env_lock_matches_previous_sha=$INITIAL_CONTENT_ENV_LOCK_MATCHES_PREVIOUS_SHA" >> "$GITHUB_OUTPUT"

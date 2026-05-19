@@ -1,0 +1,32 @@
+name: Unlock Content Environment Main
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Source SHA to persist in CONTENT_ENV_LOCKED_PRODUCTION
+        required: true
+        type: string
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  unlock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unlock content environment after successful main publish
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
+          echo "CONTENT_ENV_LOCKED_PRODUCTION=$SOURCE_SHA" >> "$GITHUB_ENV"
+          if [[ -n "$GH_TOKEN" ]]; then
+            gh variable set CONTENT_ENV_LOCKED --body notlocked --repo "$GITHUB_REPOSITORY"
+            gh variable set CONTENT_ENV_LOCKED_PRODUCTION --body "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
+            echo "Repository variable CONTENT_ENV_LOCKED set to notlocked after successful main publish."
+            echo "Repository variable CONTENT_ENV_LOCKED_PRODUCTION set to $SOURCE_SHA after successful main publish."
+          else
+            echo "PAT_TOKEN is not available; repository variables CONTENT_ENV_LOCKED and CONTENT_ENV_LOCKED_PRODUCTION were not updated after successful main publish."
+          fi

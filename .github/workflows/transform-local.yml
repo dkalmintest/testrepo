@@ -23,7 +23,28 @@ on:
       - "content/**"
 
 jobs:
+  resolve-source-sha:
+    uses: ./.github/workflows/resolve-source-sha.yml
+    with:
+      pr_number: ${{ inputs.pr_number || github.event.pull_request.number || '' }}
+      event_name: ${{ github.event_name }}
+      github_sha: ${{ github.sha }}
+      pr_action: ${{ github.event.action || '' }}
+      pr_creator_login: ${{ github.event.pull_request.user.login || '' }}
+      pr_head_sha: ${{ github.event.pull_request.head.sha || '' }}
+
+  detect-initial-lock-state:
+    needs: resolve-source-sha
+    uses: ./.github/workflows/detect-initial-lock-state.yml
+    with:
+      initial_content_env_locked: ${{ vars.CONTENT_ENV_LOCKED }}
+      source_sha: ${{ needs.resolve-source-sha.outputs.source_sha }}
+      previous_source_sha: ${{ needs.resolve-source-sha.outputs.previous_source_sha }}
+
   Build-Test-Transform:
+    needs:
+      - resolve-source-sha
+      - detect-initial-lock-state
     name: Build-Test-Transform-Upload
     environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     runs-on: ubuntu-latest
@@ -33,6 +54,12 @@ jobs:
       CONTENT_ENV_LOCKED: ${{vars.CONTENT_ENV_LOCKED}}
       INITIAL_CONTENT_ENV_LOCKED: ${{vars.CONTENT_ENV_LOCKED}}
       AZCOPY_AUTO_LOGIN_TYPE: AZCLI
+      SOURCE_SHA: ${{ needs.resolve-source-sha.outputs.source_sha }}
+      SOURCE_SHA_ORIGIN: ${{ needs.resolve-source-sha.outputs.source_sha_origin }}
+      PREVIOUS_SOURCE_SHA: ${{ needs.resolve-source-sha.outputs.previous_source_sha }}
+      INITIAL_CONTENT_ENV_LOCK_STATE: ${{ needs.detect-initial-lock-state.outputs.initial_content_env_lock_state }}
+      INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN: ${{ needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_run }}
+      INITIAL_CONTENT_ENV_LOCK_MATCHES_PREVIOUS_SHA: ${{ needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_previous_sha }}
 
     steps:
     - uses: actions/checkout@v6
@@ -50,103 +77,46 @@ jobs:
     - name: Upload HTML Artifacts
       run: echo "Skipping HTML artifact upload in local workflow."
 
-    - name: Resolve source SHA
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PR_NUMBER_INPUT: ${{ inputs.pr_number }}
-      run: |
-        SOURCE_SHA="$GITHUB_SHA"
-        SOURCE_SHA_ORIGIN="github-sha"
-        PR_NUMBER="$PR_NUMBER_INPUT"
-        if [[ -z "$PR_NUMBER" && "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-        fi
-
-        if [[ -n "$PR_NUMBER" && -n "$GH_TOKEN" ]]; then
-          SOURCE_SHA_FROM_LABEL="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name | sub("^sha-"; "")' | head -n 1)"
-          if [[ "$SOURCE_SHA_FROM_LABEL" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            SOURCE_SHA="$SOURCE_SHA_FROM_LABEL"
-            SOURCE_SHA_ORIGIN="pr-label"
-          fi
-        fi
-
-        if [[ -n "$PR_NUMBER" && -n "$GH_TOKEN" && "$SOURCE_SHA" == "$GITHUB_SHA" ]]; then
-          SOURCE_SHA_LABEL="sha-$SOURCE_SHA"
-          if gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=$SOURCE_SHA_LABEL" >/dev/null; then
-            echo "Added missing source SHA label to PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
-          else
-            echo "Failed to add missing source SHA label to PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
-          fi
-        fi
-
-        echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
-        echo "SOURCE_SHA_ORIGIN=$SOURCE_SHA_ORIGIN" >> "$GITHUB_ENV"
-        if [[ "$SOURCE_SHA_ORIGIN" == "pr-label" ]]; then
-          echo "Resolved source SHA from PR label: $SOURCE_SHA"
-        else
-          echo "Resolved source SHA from GITHUB_SHA fallback: $SOURCE_SHA"
-        fi
-
-    - name: Detect initial lock state
-      shell: bash
-      run: |
-        echo "INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN=false" >> "$GITHUB_ENV"
-        if [[ "$INITIAL_CONTENT_ENV_LOCKED" == "notlocked" ]]; then
-          echo "INITIAL_CONTENT_ENV_LOCK_STATE=notlocked" >> "$GITHUB_ENV"
-          echo "Initial CONTENT_ENV_LOCKED is explicitly notlocked and is allowed to deploy."
-        elif [[ "$INITIAL_CONTENT_ENV_LOCKED" =~ ^[0-9a-fA-F]{40}$ ]]; then
-          echo "INITIAL_CONTENT_ENV_LOCK_STATE=sha-locked" >> "$GITHUB_ENV"
-          echo "Initial CONTENT_ENV_LOCKED contains lock SHA: $INITIAL_CONTENT_ENV_LOCKED"
-          if [[ "$INITIAL_CONTENT_ENV_LOCKED" == "$SOURCE_SHA" ]]; then
-            echo "INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN=true" >> "$GITHUB_ENV"
-            echo "Initial lock SHA matches this run source SHA and is allowed to deploy."
-          fi
-        else
-          echo "INITIAL_CONTENT_ENV_LOCK_STATE=notlocked" >> "$GITHUB_ENV"
-          echo "Initial CONTENT_ENV_LOCKED is not a recognized lock value and is treated as unlocked: $INITIAL_CONTENT_ENV_LOCKED"
-        fi
-
     # Removed: Lock content publish outside main
     # The CONTENT_ENV_LOCKED value should always come from the deploy-trigger workflow (PR label SHA)
 
     - name: Skip content publish while environment is SHA-locked
-      if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE == 'sha-locked' && env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN != 'true' && !(github.event_name == 'push' && github.ref_name == 'main') }}
+      if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE == 'sha-locked' && env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN != 'true' && env.INITIAL_CONTENT_ENV_LOCK_MATCHES_PREVIOUS_SHA != 'true' && !(github.event_name == 'push' && github.ref_name == 'main') }}
       run: echo "Content publish skipped because CONTENT_ENV_LOCKED is SHA-locked for a different source SHA in this environment."
 
-    - name: Azure login
-      if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
-      run: echo "Skipping Azure login in local workflow."
+  lock-content-environment:
+    needs:
+      - resolve-source-sha
+      - detect-initial-lock-state
+      - Build-Test-Transform
+    if: ${{ needs.detect-initial-lock-state.outputs.initial_content_env_lock_state != 'sha-locked' || needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_run == 'true' || needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_previous_sha == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
+    uses: ./.github/workflows/lock-content-environment.yml
+    with:
+      source_sha: ${{ needs.resolve-source-sha.outputs.source_sha }}
+    secrets: inherit
 
-    - name: Lock content environment for this publish
-      if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
-      env:
-        GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-      run: |
-        echo "CONTENT_ENV_LOCKED=$SOURCE_SHA" >> "$GITHUB_ENV"
-        if [[ -n "$GH_TOKEN" ]]; then
-          gh variable set CONTENT_ENV_LOCKED --body "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
-          echo "Repository variable CONTENT_ENV_LOCKED set to $SOURCE_SHA for this publish."
-        else
-          echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated for this publish."
-        fi
-          
-    - name: Copy Content to Azure Storage
-      if: ${{ env.INITIAL_CONTENT_ENV_LOCK_STATE != 'sha-locked' || env.INITIAL_CONTENT_ENV_LOCK_MATCHES_RUN == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
-      run: echo "Skipping Azure Storage sync in local workflow."
+  deploy-content:
+    needs:
+      - resolve-source-sha
+      - detect-initial-lock-state
+      - Build-Test-Transform
+      - lock-content-environment
+    if: ${{ needs.detect-initial-lock-state.outputs.initial_content_env_lock_state != 'sha-locked' || needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_run == 'true' || needs.detect-initial-lock-state.outputs.initial_content_env_lock_matches_previous_sha == 'true' || (github.event_name == 'push' && github.ref_name == 'main') }}
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        run: echo "Skipping Azure login in local workflow."
 
-    - name: Unlock content environment after successful main publish
-      if: ${{ github.event_name == 'push' && github.ref_name == 'main' && success() }}
-      env:
-        GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-      run: |
-        echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
-        echo "CONTENT_ENV_LOCKED_PRODUCTION=$SOURCE_SHA" >> "$GITHUB_ENV"
-        if [[ -n "$GH_TOKEN" ]]; then
-          gh variable set CONTENT_ENV_LOCKED --body notlocked --repo "$GITHUB_REPOSITORY"
-          gh variable set CONTENT_ENV_LOCKED_PRODUCTION --body "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
-          echo "Repository variable CONTENT_ENV_LOCKED set to notlocked after successful main publish."
-          echo "Repository variable CONTENT_ENV_LOCKED_PRODUCTION set to $SOURCE_SHA after successful main publish."
-        else
-          echo "PAT_TOKEN is not available; repository variables CONTENT_ENV_LOCKED and CONTENT_ENV_LOCKED_PRODUCTION were not updated after successful main publish."
-        fi
+      - name: Copy Content to Azure Storage
+        run: echo "Skipping Azure Storage sync in local workflow."
+
+  unlock-content-environment-main:
+    needs:
+      - resolve-source-sha
+      - deploy-content
+    if: ${{ github.event_name == 'push' && github.ref_name == 'main' && needs.deploy-content.result == 'success' }}
+    uses: ./.github/workflows/unlock-content-environment-main.yml
+    with:
+      source_sha: ${{ needs.resolve-source-sha.outputs.source_sha }}
+    secrets: inherit

@@ -1,0 +1,120 @@
+name: Resolve Source SHA
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: Pull request number to resolve labels from
+        required: false
+        type: string
+      event_name:
+        description: Triggering event name from the caller workflow
+        required: true
+        type: string
+      github_sha:
+        description: Caller workflow github.sha value
+        required: true
+        type: string
+      pr_action:
+        description: Pull request action from the caller workflow
+        required: false
+        type: string
+      pr_creator_login:
+        description: Pull request creator login from the caller workflow
+        required: false
+        type: string
+      pr_head_sha:
+        description: Pull request head sha from the caller workflow
+        required: false
+        type: string
+    outputs:
+      source_sha:
+        description: Resolved source SHA for downstream workflows
+        value: ${{ jobs.resolve-source-sha.outputs.source_sha }}
+      source_sha_origin:
+        description: Source of the resolved SHA
+        value: ${{ jobs.resolve-source-sha.outputs.source_sha_origin }}
+      previous_source_sha:
+        description: Previous PR sha label before refresh, when available
+        value: ${{ jobs.resolve-source-sha.outputs.previous_source_sha }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  resolve-source-sha:
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      source_sha_origin: ${{ steps.resolve.outputs.source_sha_origin }}
+      previous_source_sha: ${{ steps.resolve.outputs.previous_source_sha }}
+    steps:
+      - name: Resolve source SHA
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
+          EVENT_NAME_INPUT: ${{ inputs.event_name }}
+          GITHUB_SHA_INPUT: ${{ inputs.github_sha }}
+          PR_ACTION_INPUT: ${{ inputs.pr_action }}
+          PR_CREATOR_LOGIN_INPUT: ${{ inputs.pr_creator_login }}
+          PR_HEAD_SHA_INPUT: ${{ inputs.pr_head_sha }}
+        run: |
+          SOURCE_SHA="$GITHUB_SHA_INPUT"
+          SOURCE_SHA_ORIGIN="github-sha"
+          PREVIOUS_SOURCE_SHA=""
+          PR_NUMBER="$PR_NUMBER_INPUT"
+
+          if [[ "$EVENT_NAME_INPUT" == "pull_request" && "$PR_ACTION_INPUT" == "synchronize" && ! "$PR_CREATOR_LOGIN_INPUT" =~ \[bot\]$ && "$PR_HEAD_SHA_INPUT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            SOURCE_SHA="$PR_HEAD_SHA_INPUT"
+            SOURCE_SHA_ORIGIN="pr-head-sha"
+          fi
+
+          if [[ "$SOURCE_SHA_ORIGIN" != "pr-head-sha" && -n "$PR_NUMBER" && -n "$GH_TOKEN" ]]; then
+            SOURCE_SHA_FROM_LABEL="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name | sub("^sha-"; "")' | head -n 1)"
+            if [[ "$SOURCE_SHA_FROM_LABEL" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              SOURCE_SHA="$SOURCE_SHA_FROM_LABEL"
+              SOURCE_SHA_ORIGIN="pr-label"
+            fi
+          fi
+
+          if [[ -n "$PR_NUMBER" && -n "$GH_TOKEN" && ( "$SOURCE_SHA_ORIGIN" == "pr-head-sha" || "$SOURCE_SHA" == "$GITHUB_SHA_INPUT" ) ]]; then
+            SOURCE_SHA_LABEL="sha-$SOURCE_SHA"
+            EXISTING_SHA_LABELS="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name')"
+            if [[ -n "$EXISTING_SHA_LABELS" ]]; then
+              while IFS= read -r existing_label; do
+                [[ -z "$existing_label" ]] && continue
+                existing_sha="${existing_label#sha-}"
+                if [[ "$existing_sha" =~ ^[0-9a-fA-F]{40}$ && "$existing_sha" != "$SOURCE_SHA" && -z "$PREVIOUS_SOURCE_SHA" ]]; then
+                  PREVIOUS_SOURCE_SHA="$existing_sha"
+                fi
+                if [[ "$existing_label" != "$SOURCE_SHA_LABEL" ]]; then
+                  gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$existing_label"
+                  echo "Removed stale source SHA label from PR #$PR_NUMBER: $existing_label"
+                fi
+              done <<< "$EXISTING_SHA_LABELS"
+            fi
+
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=$SOURCE_SHA_LABEL" >/dev/null; then
+              echo "Ensured source SHA label on PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
+            else
+              echo "Failed to ensure source SHA label on PR #$PR_NUMBER: $SOURCE_SHA_LABEL"
+            fi
+          fi
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_sha_origin=$SOURCE_SHA_ORIGIN" >> "$GITHUB_OUTPUT"
+          echo "previous_source_sha=$PREVIOUS_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          if [[ "$SOURCE_SHA_ORIGIN" == "pr-label" ]]; then
+            echo "Resolved source SHA from PR label: $SOURCE_SHA"
+          elif [[ "$SOURCE_SHA_ORIGIN" == "pr-head-sha" ]]; then
+            echo "Resolved source SHA from PR head SHA on human PR update: $SOURCE_SHA"
+            if [[ -n "$PREVIOUS_SOURCE_SHA" ]]; then
+              echo "Previous PR source SHA label before refresh: $PREVIOUS_SOURCE_SHA"
+            fi
+          else
+            echo "Resolved source SHA from GITHUB_SHA fallback: $SOURCE_SHA"
+          fi

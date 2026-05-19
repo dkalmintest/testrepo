@@ -1,0 +1,88 @@
+name: Pull Content well-architected-internal
+
+on:
+  repository_dispatch:
+    types: [content-updated]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Optional source repository commit SHA to sync
+        required: false
+        type: string
+
+jobs:
+  pull-content:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Set source repo
+        id: source
+        run: |
+          ORG="${{ github.event.client_payload.org }}"
+          REPO="${{ github.event.client_payload.repo }}"
+          if [[ -n "$ORG" && -n "$REPO" ]]; then
+            echo "repository=${ORG}/${REPO}" >> "$GITHUB_OUTPUT"
+          else
+            echo "repository=github/github-well-architected-internal" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Checkout source repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ github.event.inputs.sha || github.event.client_payload.sha || '' }}
+          fetch-depth: 0
+          path: sourcerepo
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Capture source commit SHA
+        id: source_meta
+        run: |
+          echo "sha=$(git -C sourcerepo rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Copy content
+        run: |
+          # Mirror trusted source content so upstream deletions are included.
+          mkdir -p ./content/well-architected
+          rsync -a --delete sourcerepo/content/ ./content/well-architected/
+          mkdir -p ./content/well-architected/shortcodes
+          rsync -a --delete sourcerepo/layouts/shortcodes/ ./content/well-architected/shortcodes/
+          rm -rf sourcerepo
+
+      - name: Create PR if changed
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          SOURCE_SHA: ${{ steps.source_meta.outputs.sha }}
+          SOURCE_REPO: ${{ steps.source.outputs.repository }}
+        run: |
+          BRANCH="chore/sync-content-$(date +%Y%m%d%H%M%S)"
+          SHORT_SHA="${SOURCE_SHA:0:7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git checkout -b "$BRANCH"
+            git commit -m "chore: pull latest content from ${SOURCE_REPO} (${SHORT_SHA})"
+            git push origin "$BRANCH"
+            SHA_LABEL="sha-${SOURCE_SHA}"
+            gh label create "$SHA_LABEL" \
+              --color "0E8A16" \
+              --description "Source content commit full SHA" \
+              >/dev/null 2>&1 || true
+            PR_BODY=$(printf 'Automated PR to pull latest content from the %s repository.\n\nsource_sha=%s\nsource_repo=%s\n' "$SOURCE_REPO" "$SOURCE_SHA" "$SOURCE_REPO")
+            gh pr create \
+              --title "chore: sync content from ${SOURCE_REPO} repo" \
+              --body "$PR_BODY" \
+              --label "$SHA_LABEL" \
+              --base main \
+              --head "$BRANCH"
+          fi
