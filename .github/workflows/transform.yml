@@ -13,13 +13,13 @@ on:
       pr_number:
         description: Pull request number to resolve the source SHA label from
         required: false
- # push:
- #   branches: [ "main" ]
- #   paths:
- #     - "content/**"
- # pull_request:
- #   paths:
- #     - "content/**"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "content/**"
+  pull_request:
+    paths:
+      - "content/**"
 
 jobs:
   Build-Test-Transform:
