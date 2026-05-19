@@ -123,9 +123,12 @@ jobs:
         GH_TOKEN: ${{ secrets.PAT_TOKEN }}
       run: |
         echo "CONTENT_ENV_LOCKED=notlocked" >> "$GITHUB_ENV"
+        echo "CONTENT_ENV_LOCKED_PRODUCTION=$SOURCE_SHA" >> "$GITHUB_ENV"
         if [[ -n "$GH_TOKEN" ]]; then
           gh variable set CONTENT_ENV_LOCKED --body notlocked --repo "$GITHUB_REPOSITORY"
+          gh variable set CONTENT_ENV_LOCKED_PRODUCTION --body "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
           echo "Repository variable CONTENT_ENV_LOCKED set to notlocked after successful main publish."
+          echo "Repository variable CONTENT_ENV_LOCKED_PRODUCTION set to $SOURCE_SHA after successful main publish."
         else
-          echo "PAT_TOKEN is not available; repository variable CONTENT_ENV_LOCKED was not updated after successful main publish."
+          echo "PAT_TOKEN is not available; repository variables CONTENT_ENV_LOCKED and CONTENT_ENV_LOCKED_PRODUCTION were not updated after successful main publish."
         fi
