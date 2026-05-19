@@ -68,6 +68,15 @@ jobs:
           PREVIOUS_SOURCE_SHA=""
           PR_NUMBER="$PR_NUMBER_INPUT"
 
+          if [[ -z "$PR_NUMBER" && "$EVENT_NAME_INPUT" == "push" && -n "$GH_TOKEN" ]]; then
+            PR_NUMBER="$(gh api -H "Accept: application/vnd.github+json" "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA_INPUT/pulls" --jq 'map(select(.merged_at != null)) | .[0].number // empty' | head -n 1)"
+            if [[ -n "$PR_NUMBER" ]]; then
+              echo "Resolved merged PR number from push SHA: $PR_NUMBER"
+            else
+              echo "No merged PR associated with push SHA $GITHUB_SHA_INPUT; falling back to GITHUB_SHA."
+            fi
+          fi
+
           if [[ "$EVENT_NAME_INPUT" == "pull_request" && "$PR_ACTION_INPUT" == "synchronize" && ! "$PR_CREATOR_LOGIN_INPUT" =~ \[bot\]$ && "$PR_HEAD_SHA_INPUT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             SOURCE_SHA="$PR_HEAD_SHA_INPUT"
             SOURCE_SHA_ORIGIN="pr-head-sha"
