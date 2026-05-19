@@ -9,6 +9,10 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to resolve the source SHA label from
+        required: false
   push:
     branches: [ "main" ]
     paths:
@@ -49,10 +53,16 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        PR_NUMBER_INPUT: ${{ inputs.pr_number }}
       run: |
         SOURCE_SHA="$GITHUB_SHA"
-        if [[ "$GITHUB_EVENT_NAME" == "pull_request" && -n "$GH_TOKEN" ]]; then
-          SOURCE_SHA_FROM_LABEL="$(gh pr view "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name | sub("^sha-"; "")' | head -n 1)"
+        PR_NUMBER="$PR_NUMBER_INPUT"
+        if [[ -z "$PR_NUMBER" && "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+        fi
+
+        if [[ -n "$PR_NUMBER" && -n "$GH_TOKEN" ]]; then
+          SOURCE_SHA_FROM_LABEL="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[] | select(.name | startswith("sha-")) | .name | sub("^sha-"; "")' | head -n 1)"
           if [[ "$SOURCE_SHA_FROM_LABEL" =~ ^[0-9a-fA-F]{40}$ ]]; then
             SOURCE_SHA="$SOURCE_SHA_FROM_LABEL"
           fi
