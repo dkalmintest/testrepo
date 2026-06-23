@@ -1,0 +1,148 @@
+# Transform Content runs a go module that handles transforming content
+# and uploads to AFD.
+
+name: CI Learn
+env:
+  RELEVANT_PATH_REGEX: '^(content/|layouts/shortcodes/)|^\.github/workflows/3\.ci-learn\.yml$'
+permissions:
+  contents: write
+  id-token: write
+  issues: write
+  pull-requests: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_content:
+        description: Deploy Content
+        required: false
+        type: boolean
+        default: true
+      deploy_environment:
+        description: 'Override deployment environment'
+        required: false
+        type: choice
+        options:
+          - staging
+          - production
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  relevant-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      content_changed: ${{ steps.filter.outputs.content_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect relevant file changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            base_ref="origin/${GITHUB_BASE_REF}"
+            git fetch --no-tags origin "${GITHUB_BASE_REF}"
+            diff_range="${base_ref}...${GITHUB_SHA}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            before_sha="${{ github.event.before }}"
+            if [[ "$before_sha" == "0000000000000000000000000000000000000000" ]]; then
+              empty_tree_sha="$(git hash-object -t tree /dev/null)"
+              diff_range="${empty_tree_sha}...${GITHUB_SHA}"
+            else
+              diff_range="${before_sha}...${GITHUB_SHA}"
+            fi
+          else
+            echo "content_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$diff_range")"
+          if echo "$changed_files" | grep -Eq "$RELEVANT_PATH_REGEX"; then
+            echo "content_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "content_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  Build-Test-Transform:
+    needs:
+      - relevant-changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.relevant-changes.outputs.content_changed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report status
+        run: echo "ran"
+
+  deploy-content:
+    needs:
+      - relevant-changes
+      - Build-Test-Transform
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_content) && (github.event_name == 'workflow_dispatch' || needs.relevant-changes.outputs.content_changed == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report status
+        run: echo "ran"
+
+  comment-pr-success:
+    needs:
+      - deploy-content
+    if: ${{ needs.deploy-content.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on successful deployment
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_ENV: ${{ inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const deploymentUrl = process.env.DEPLOY_ENV === 'production'
+              ? 'https://learn.github.com/well-architected'
+              : 'https://learn-staging.githubapp.com/well-architected';
+
+            let prNumber = context.payload.pull_request?.number;
+
+            if (!prNumber) {
+              const branchName = context.ref.replace('refs/heads/', '');
+              const { data: pullRequests } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                head: `${owner}:${branchName}`,
+                per_page: 1
+              });
+              prNumber = pullRequests[0]?.number;
+            }
+
+            if (!prNumber) {
+              core.info('No open PR is associated with this branch. Skipping PR comment.');
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body: `Success! View your deployment: ${deploymentUrl}`
+            });
+
+  required-status:
+    needs:
+      - relevant-changes
+      - Build-Test-Transform
+      - deploy-content
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate workflow result
+        run: |
+          [[ "${{ needs.relevant-changes.outputs.content_changed }}" != "true" ]] || \
+          ([[ "${{ needs.Build-Test-Transform.result }}" == "success" ]] && \
+           [[ "${{ needs.deploy-content.result }}" == "success" ]])
