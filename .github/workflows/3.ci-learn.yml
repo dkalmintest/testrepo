@@ -2,8 +2,6 @@
 # and uploads to AFD.
 
 name: CI Learn
-env:
-  RELEVANT_PATH_REGEX: '^(content/|layouts/shortcodes/)|^\.github/workflows/3\.ci-learn\.yml$'
 permissions:
   contents: write
   id-token: write
@@ -27,67 +25,33 @@ on:
           - production
   push:
     branches: [ "main" ]
+    paths:
+      - "content/**"
+      - "layouts/shortcodes/**"
   pull_request:
     branches:
       - main
+    paths:
+      - "content/**"
+      - "layouts/shortcodes/**"
 
 jobs:
-  relevant-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      content_changed: ${{ steps.filter.outputs.content_changed }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Detect relevant file changes
-        id: filter
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            base_ref="origin/${GITHUB_BASE_REF}"
-            git fetch --no-tags origin "${GITHUB_BASE_REF}"
-            diff_range="${base_ref}...${GITHUB_SHA}"
-          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            before_sha="${{ github.event.before }}"
-            if [[ "$before_sha" == "0000000000000000000000000000000000000000" ]]; then
-              empty_tree_sha="$(git hash-object -t tree /dev/null)"
-              diff_range="${empty_tree_sha}...${GITHUB_SHA}"
-            else
-              diff_range="${before_sha}...${GITHUB_SHA}"
-            fi
-          else
-            echo "content_changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          changed_files="$(git diff --name-only "$diff_range")"
-          if echo "$changed_files" | grep -Eq "$RELEVANT_PATH_REGEX"; then
-            echo "content_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "content_changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
   Build-Test-Transform:
-    needs:
-      - relevant-changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.relevant-changes.outputs.content_changed == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report status
-        run: echo "ran"
+    uses: github/cse-content-engine/.github/workflows/transform-build.yml@main
+    secrets:
+      PAT_TOKEN_CSE: ${{ secrets.PAT_TOKEN_CSE }}
 
   deploy-content:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_content }}
     needs:
-      - relevant-changes
       - Build-Test-Transform
-    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_content) && (github.event_name == 'workflow_dispatch' || needs.relevant-changes.outputs.content_changed == 'true') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report status
-        run: echo "ran"
+    uses: github/cse-content-engine/.github/workflows/transform-deploy.yml@main
+    with:
+      deploy_environment: ${{ inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+      storage_account_name: ${{ (inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging')) == 'production' && vars.CE_STORAGE_ACCOUNT_NAME_PROD || vars.CE_STORAGE_ACCOUNT_NAME }}
+      azure_client_id: ${{ (inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging')) == 'production' && vars.CE_AZURE_AD_CLIENT_ID_PROD || vars.CE_AZURE_AD_CLIENT_ID }}
+      azure_tenant_id: ${{ (inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging')) == 'production' && vars.CE_AZURE_AD_TENANT_ID_PROD || vars.CE_AZURE_AD_TENANT_ID }}
+      azure_subscription_id: ${{ (inputs.deploy_environment || (github.ref_name == 'main' && 'production' || 'staging')) == 'production' && vars.CE_AZURE_AD_SUBSCRIPTION_ID_PROD || vars.CE_AZURE_AD_SUBSCRIPTION_ID }}
 
   comment-pr-success:
     needs:
@@ -132,17 +96,3 @@ jobs:
               issue_number: prNumber,
               body: `Success! View your deployment: ${deploymentUrl}`
             });
-
-  required-status:
-    needs:
-      - relevant-changes
-      - Build-Test-Transform
-      - deploy-content
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Evaluate workflow result
-        run: |
-          [[ "${{ needs.relevant-changes.outputs.content_changed }}" != "true" ]] || \
-          ([[ "${{ needs.Build-Test-Transform.result }}" == "success" ]] && \
-           [[ "${{ needs.deploy-content.result }}" == "success" ]])
